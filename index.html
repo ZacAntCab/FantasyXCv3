@@ -1,0 +1,18 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JL Mann Patriots Fantasy XC</title><link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="site.js" defer></script></head><body>
+<header><div class="nav"><div class="brand">JL Mann Patriots Fantasy XC</div>
+<nav class="navlinks"><a href="index.html">Home</a><a href="past-meets.html">Past Meets</a><a href="teams.html">Teams</a><a href="players.html">Players</a><a href="meet-calendar.html">Meet Calendar</a></nav></div></header><main>
+<section class="hero"><h1>JL Mann Patriots Fantasy XC</h1><p>League information, standings, players, and meets pulled directly from the spreadsheet.</p></section>
+<div class="grid">
+<div class="card"><div class="label">League Leader</div><div class="value" id="leader">Loading...</div><div id="leader-time"></div></div>
+<div class="card"><div class="label">Next Meet</div><div class="value" id="next-meet">Loading...</div><div id="next-date"></div></div>
+<div class="card"><div class="label">Last Meet</div><div class="value" id="last-meet">Loading...</div><div id="last-date"></div></div>
+<div class="card"><div class="label">Players</div><div class="value" id="player-count">Loading...</div></div>
+</div>
+<section class="panel"><h2>Player Preview</h2><table><thead><tr><th>Player</th><th>Team</th><th>Season Best</th></tr></thead><tbody id="preview-players"></tbody></table></section>
+<section class="panel"><h2>Team Rankings</h2><p class="muted-note">Season points are calculated automatically from completed meet results. Lower score is better.</p><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Team</th><th>Season Points</th></tr></thead><tbody id="home-team-rankings"></tbody></table></div><p><a class="back-link" href="teams.html">View Detailed Team Rankings →</a></p></section>
+<p data-error></p>
+</main><footer>Data source: JL_Mann_Patriots_Fantasy_XC.xlsx. Update the spreadsheet, then refresh the website.</footer></body></html>
