@@ -428,16 +428,15 @@ function averagePoints(p) {
 // one IR replacement.
 
 function getIRReplacement(team, id) {
-  const teamRows = meetResults(id).filter(r => {
-    const p = DATA.Players.find(
-      x =>
-        playerId(x) ===
-        resultPlayerId(r)
-    );
+  const meetRows = meetResults(id);
 
-    return (
-      resultTeam(r, p || {}) === team
-    );
+  // Count DNS runners assigned to this team
+  // for THIS specific meet.
+  const teamRows = meetRows.filter(r => {
+    const historicalTeam =
+      firstValue(r, ["Team"]).trim();
+
+    return historicalTeam === team;
   });
 
   const dnsCount =
@@ -447,9 +446,22 @@ function getIRReplacement(team, id) {
     return null;
   }
 
-  const eligible = meetResults(id)
+  // IR runners are runners with NO team recorded
+  // on the Results row for THIS meet.
+  //
+  // DNS IR runners are not eligible.
+  // DNF IR runners ARE eligible.
+  const eligible = meetRows
     .filter(r => {
-      if (isDNS(r) || isDNF(r)) {
+      if (isDNS(r)) {
+        return false;
+      }
+
+      const historicalTeam =
+        firstValue(r, ["Team"]).trim();
+
+      // Blank team on this meet = IR.
+      if (historicalTeam !== "") {
         return false;
       }
 
@@ -463,16 +475,11 @@ function getIRReplacement(team, id) {
         return false;
       }
 
-      const playerTeam = firstValue(
-        p,
-        ["Team", "Fantasy Team"]
-      );
-
-      // Blank team = IR
-      if (
-        String(playerTeam || "").trim() !== ""
-      ) {
-        return false;
+      // A finished runner must have a valid time.
+      // A DNF is also eligible even though
+      // they do not have a finishing time.
+      if (isDNF(r)) {
+        return true;
       }
 
       return Number.isFinite(
@@ -483,9 +490,11 @@ function getIRReplacement(team, id) {
     })
     .map(r => ({
       ...r,
-      _time: raceTimeSeconds(
-        firstValue(r, ["Time"])
-      ),
+      _time: isDNF(r)
+        ? Infinity
+        : raceTimeSeconds(
+            firstValue(r, ["Time"])
+          ),
       _isIRReplacement: true
     }))
     .sort(
@@ -496,7 +505,6 @@ function getIRReplacement(team, id) {
     ? eligible[0]
     : null;
 }
-
 
 // ==============================
 // TEAM MEET SCORING
