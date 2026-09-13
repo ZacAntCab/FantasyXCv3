@@ -502,98 +502,74 @@ function getIRReplacement(team, id) {
 // TEAM MEET SCORING
 // ==============================
 
-function buildTeamMeet(team, id) {
-  const rows = meetResults(id).filter(r => {
-    const p = DATA.Players.find(
-      x =>
-        playerId(x) ===
-        resultPlayerId(r)
-    );
+function buildTeamMeet(meetId, teamName, players, results) {
+  const teamResults = results
+    .filter(r => r.meetId === meetId && r.team === teamName);
 
-    return (
-      resultTeam(r, p || {}) === team
-    );
+  const runners = teamResults
+    .map(r => {
+      const player = players.find(p => p.id === r.playerId);
+      return {
+        ...r,
+        player,
+        racePlace: null,
+        status: String(r.status || "").trim().toUpperCase()
+      };
+    })
+    .filter(r => r.player);
+
+  // Calculate overall race places using recorded times.
+  const finishers = runners
+    .filter(r => r.status !== "DNS" && r.status !== "DNF" && r.timeSeconds != null)
+    .sort((a, b) => a.timeSeconds - b.timeSeconds);
+
+  let currentPlace = 0;
+  let previousTime = null;
+
+  finishers.forEach((r, index) => {
+    if (previousTime === null || r.timeSeconds !== previousTime) {
+      currentPlace = index + 1;
+    }
+
+    r.racePlace = currentPlace;
+    previousTime = r.timeSeconds;
   });
 
-  // Finished runners are ordered by
-  // their actual race place.
-  const finished = rows
-    .filter(
-      r =>
-        !isDNS(r) &&
-        !isDNF(r) &&
-        raceTimeSeconds(
-          firstValue(r, ["Time"])
-        ) !== null
-    )
-    .map(r => ({
-      ...r,
-      _racePlace: racePlace(r, id)
-    }))
-    .sort(
-      (a, b) =>
-        a._racePlace - b._racePlace
-    );
+  // DNS runners do not count.
+  const dns = runners.filter(r => r.status === "DNS");
 
-  // DNF counts as the last runner
-  // for team scoring.
-  const dnfs = rows.filter(isDNF);
+  // DNF runners have no race place and are placed after all finishers
+  // on their fantasy team.
+  const dnfs = runners.filter(r => r.status === "DNF");
 
-  // Check for IR replacement.
-  const ir = getIRReplacement(
-    team,
-    id
-  );
+  // Team runners are ordered by their actual overall race place.
+  const scoring = [...finishers].sort((a, b) => a.racePlace - b.racePlace);
 
-  if (ir) {
-    ir._racePlace = racePlace(
-      ir,
-      id
-    );
+  // DNF counts as the last runner for the team.
+  dnfs.forEach(r => scoring.push(r));
 
-    finished.push(ir);
+  // Only the first five team runners score.
+  const firstFive = scoring.slice(0, 5);
 
-    finished.sort(
-      (a, b) =>
-        a._racePlace - b._racePlace
-    );
-  }
+  // IMPORTANT:
+  // Score using the ACTUAL overall race place, not team-local place.
+  // Example: 2nd + 7th + 12th + 18th + 25th = 64.
+  const score = firstFive.reduce((sum, r) => {
+    if (r.racePlace != null) {
+      return sum + r.racePlace;
+    }
 
-  const ordered =
-    finished.concat(dnfs);
-
-  // Team place is the order within
-  // that team's runners.
-  ordered.forEach((r, i) => {
-    r.teamPlace = i + 1;
-  });
-
-  // First five score.
-  const scoring =
-    ordered.slice(0, 5);
-
-  // Runners 6+ are displacers.
-  const extra =
-    ordered.slice(5);
-
-  // DNS does not count.
-  const dns =
-    rows.filter(isDNS);
-
-  const score =
-    scoring.reduce(
-      (sum, r) =>
-        sum + r.teamPlace,
-      0
-    );
+    // DNF has no race place. It counts as the last runner on the team.
+    // Give it the next team position after the finished runners.
+    return sum + scoring.indexOf(r) + 1;
+  }, 0);
 
   return {
-    rows,
-    scoring,
-    extra,
-    dns,
-    ir,
-    score
+    team: teamName,
+    score,
+    scoring: firstFive,
+    displacers: scoring.slice(5),
+    dns
   };
 }
 
