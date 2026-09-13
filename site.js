@@ -177,11 +177,8 @@ function resultMeetId(r) {
 
 // Player's fantasy team comes from the Results sheet first,
 // then falls back to the Players sheet.
-function resultTeam(r, p) {
-  return (
-    firstValue(r, ["Team", "Fantasy Team"]) ||
-    firstValue(p, ["Team", "Fantasy Team"])
-  );
+function resultTeam(r,p){
+  return firstValue(r,["Team","Fantasy Team"]) || "Free Agent";
 }
 
 
