@@ -497,282 +497,188 @@ function getIRReplacement(team, id) {
     : null;
 }
 
+
 // ==============================
-// TEAM SCORING
+// TEAM MEET SCORING
 // ==============================
 
 function buildTeamMeet(teamName, meetId) {
   const allResults = meetResults(meetId);
-  const places = racePlaces(meetId);
 
-  // Get every result belonging to this fantasy team.
+  // Get every runner assigned to this fantasy team for this meet.
   const teamResults = allResults
     .map(r => {
       const p = DATA.Players.find(
-        x =>
-          playerId(x) ===
-          resultPlayerId(r)
+        x => playerId(x) === resultPlayerId(r)
       );
 
       return {
-        result: r,
+        ...r,
         player: p || null,
         team: resultTeam(r, p || {}),
-        status: resultStatus(r),
-        place: racePlace(r, meetId)
+        status: resultStatus(r)
       };
     })
-    .filter(
-      x =>
-        x.team === teamName &&
-        x.player
-    );
+    .filter(r => r.player && r.team === teamName);
 
-  // Finished runners first, ordered by ACTUAL
-  // overall race place.
+  // Race places are calculated from EVERY finisher in the meet,
+  // not just the runners on this fantasy team.
+  const places = racePlaces(meetId);
+
   const finished = teamResults
-    .filter(
-      x =>
-        x.status !== "DNS" &&
-        x.status !== "DNF" &&
-        Number.isFinite(x.place)
-    )
-    .sort(
-      (a, b) =>
-        a.place - b.place
+    .filter(r => !isDNS(r) && !isDNF(r))
+    .map(r => ({
+      ...r,
+      racePlace: places.get(resultPlayerId(r)) ?? null
+    }))
+    .filter(r => Number.isFinite(r.racePlace))
+    .sort((a, b) => a.racePlace - b.racePlace);
+
+  const dnfs = teamResults.filter(r => isDNF(r));
+  const dns = teamResults.filter(r => isDNS(r));
+
+  // DNF runners are always after the team's finished runners.
+  const ordered = [...finished, ...dnfs];
+
+  // If the team has 3+ DNS runners, add one IR replacement.
+  const ir = getIRReplacement(teamName, meetId);
+
+  if (ir) {
+    const irPlayer = DATA.Players.find(
+      p => playerId(p) === resultPlayerId(ir)
     );
 
-  // DNF runners come after every finisher.
-  const dnfs = teamResults.filter(
-    x => x.status === "DNF"
-  );
-
-  // DNS runners do not count toward the team.
-  const dns = teamResults.filter(
-    x => x.status === "DNS"
-  );
-
-  const ordered = [
-    ...finished,
-    ...dnfs
-  ];
-
-  // If there are at least 3 DNS runners,
-  // attempt one IR replacement.
-  const replacement =
-    getIRReplacement(
-      teamName,
-      meetId
-    );
-
-  if (replacement) {
-    const replacementPlayer =
-      DATA.Players.find(
-        p =>
-          playerId(p) ===
-          resultPlayerId(replacement)
-      );
-
-    const replacementPlace =
-      racePlace(
-        replacement,
-        meetId
-      );
-
-    if (
-      replacementPlayer &&
-      Number.isFinite(replacementPlace)
-    ) {
-      ordered.push({
-        result: replacement,
-        player: replacementPlayer,
-        team: teamName,
-        status: "",
-        place: replacementPlace,
-        irReplacement: true
-      });
-    }
+    ordered.push({
+      ...ir,
+      player: irPlayer || null,
+      team: "",
+      status: resultStatus(ir),
+      racePlace: places.get(resultPlayerId(ir)) ?? null,
+      _isIRReplacement: true
+    });
   }
 
-  // First five runners score.
-  const scoring =
-    ordered.slice(0, 5);
+  // The first five runners are the scoring runners.
+  const scoring = ordered.slice(0, 5);
 
-  // Everyone after the first five is
-  // a displacer / extra runner.
-  const extra =
-    ordered.slice(5);
+  // Runners after the first five are displacers.
+  const extra = ordered.slice(5);
 
-  // IMPORTANT:
-  // Score is based on the runners' ACTUAL
-  // overall race places, NOT their position
-  // within their fantasy team.
+  // Team score = the ACTUAL overall race places of the first five.
   //
   // Example:
-  // 3rd + 8th + 14th + 21st + 27th
-  // = 73 points
+  // 2nd + 7th + 12th + 18th + 25th = 64.
   //
-  // It is NOT automatically 1+2+3+4+5 = 15.
+  // A DNF has no actual race place, so it is treated as the
+  // team's last runner and receives a penalty place after all
+  // finishers in the meet.
+  const finishedCount = places.size;
 
-  let score = 0;
-
-  scoring.forEach(x => {
-    if (Number.isFinite(x.place)) {
-      score += x.place;
-    } else if (x.status === "DNF") {
-      // DNF receives a place after all finishers.
-      score += places.size + 1;
+  const score = scoring.reduce((sum, r, index) => {
+    if (Number.isFinite(r.racePlace)) {
+      return sum + r.racePlace;
     }
-  });
+
+    if (isDNF(r)) {
+      return sum + finishedCount + 1;
+    }
+
+    return sum;
+  }, 0);
 
   return {
     team: teamName,
-    meetId: meetId,
-
-    // All team runners used to build the result.
-    rows: teamResults,
-
-    // First five scoring runners.
-    scoring: scoring,
-
-    // Runners after the first five.
-    extra: extra,
-
-    // Alias used elsewhere on the site.
+    score,
+    scoring,
+    extra,
     displacers: extra,
-
-    // DNS runners do not count.
-    dns: dns,
-
-    // Final team score.
-    score: score
+    dns,
+    rows: teamResults
   };
 }
-
 
 // ==============================
 // TEAM SCORE DISPLAY
 // ==============================
 
 function teamFormula(td) {
-  if (!td || !td.scoring.length) {
-    return "—";
-  }
-
-  return td.scoring
-    .map(x => {
-      if (x.status === "DNF") {
-        return String(
-          x.place || "DNF"
-        );
+  const parts = td.scoring
+    .map(r => {
+      if (Number.isFinite(r.racePlace)) {
+        return String(r.racePlace);
       }
 
-      return String(x.place);
+      if (isDNF(r)) {
+        return "DNF";
+      }
+
+      return "—";
     })
-    .join(" + ");
+    .concat(
+      td.extra.map(r => {
+        if (Number.isFinite(r.racePlace)) {
+          return `(${r.racePlace})`;
+        }
+
+        if (isDNF(r)) {
+          return "(DNF)";
+        }
+
+        return "(—)";
+      })
+    )
+    .concat(
+      td.dns.map(() => "(DNS)")
+    );
+
+  return parts.length ? parts.join(" + ") : "—";
 }
 
 
 function teamRunnerFormula(td) {
-  if (!td) {
-    return "";
-  }
+  const label = r => {
+    const p = DATA.Players.find(
+      x => playerId(x) === resultPlayerId(r)
+    );
 
-  const scoringHtml =
-    td.scoring
-      .map(x => {
-        const name =
-          x.player
-            ? playerLink(x.player)
-            : "Unknown Player";
+    const name = p ? esc(p.Name) : "Unknown Player";
 
-        const label =
-          x.irReplacement
-            ? " <span class=\"badge\">IR Replacement</span>"
-            : "";
+    return r._isIRReplacement
+      ? `${name} (IR Replacement)`
+      : name;
+  };
 
-        const place =
-          x.status === "DNF"
-            ? "DNF"
-            : x.place;
+  return td.scoring
+    .map(r => {
+      let place = Number.isFinite(r.racePlace)
+        ? r.racePlace
+        : "DNF";
 
-        return `
-          <div>
-            ${name}
-            — ${place}${label}
-          </div>
-        `;
+      return `${place} ${label(r)}${
+        isDNF(r) ? " (DNF)" : ""
+      }`;
+    })
+    .concat(
+      td.extra.map(r => {
+        let place = Number.isFinite(r.racePlace)
+          ? r.racePlace
+          : "DNF";
+
+        return `(${place} ${label(r)}${
+          isDNF(r) ? " (DNF)" : ""
+        })`;
       })
-      .join("");
-
-  const extraHtml =
-    td.extra
-      .map(x => {
-        const name =
-          x.player
-            ? playerLink(x.player)
-            : "Unknown Player";
-
-        const place =
-          x.status === "DNF"
-            ? "DNF"
-            : x.place;
-
-        return `
-          <div>
-            ${name}
-            — ${place}
-          </div>
-        `;
-      })
-      .join("");
-
-  const dnsHtml =
-    td.dns
-      .map(x => {
-        const name =
-          x.player
-            ? playerLink(x.player)
-            : "Unknown Player";
-
-        return `
-          <div>
-            ${name} — DNS
-          </div>
-        `;
-      })
-      .join("");
-
-  return `
-    ${scoringHtml}
-
-    ${
-      extraHtml
-        ? `
-          <div class="team-history">
-            <strong>Displacers:</strong>
-            ${extraHtml}
-          </div>
-        `
-        : ""
-    }
-
-    ${
-      dnsHtml
-        ? `
-          <div class="team-history">
-            <strong>DNS:</strong>
-            ${dnsHtml}
-          </div>
-        `
-        : ""
-    }
-  `;
+    )
+    .concat(
+      td.dns.map(
+        r => `(DNS ${label(r)})`
+      )
+    )
+    .join(" + ") || "No runners";
 }
 
-
 // ==============================
-// MEET COMPLETION
+// TEAM RANKINGS
 // ==============================
 
 function meetIsCompleted(m) {
@@ -787,235 +693,311 @@ function meetIsCompleted(m) {
 }
 
 
-// ==============================
-// TEAM RANKINGS
-// ==============================
-
 function teamRankings() {
-  const teams = DATA.Teams
-    .map(t =>
-      firstValue(t, ["Team"])
-    )
-    .filter(Boolean);
-
-  const completedMeets =
+  const completed =
     DATA.Meets.filter(
       meetIsCompleted
     );
 
-  const rankings = teams.map(name => {
-    const meetScores = [];
-
-    completedMeets.forEach(m => {
-      const meetId =
+  return DATA.Teams
+    .map(t => {
+      const name =
         firstValue(
-          m,
-          ["Meet ID"]
+          t,
+          ["Team"]
         );
 
-      const td =
-        buildTeamMeet(
-          name,
-          meetId
+      const meetScores =
+        completed
+          .map(m => {
+            const td =
+              buildTeamMeet(
+                name,
+                firstValue(
+                  m,
+                  ["Meet ID"]
+                )
+              );
+
+            return {
+              meetId:
+                firstValue(
+                  m,
+                  ["Meet ID"]
+                ),
+
+              meet:
+                firstValue(
+                  m,
+                  ["Meet"]
+                ),
+
+              date:
+                firstValue(
+                  m,
+                  ["Date"]
+                ),
+
+              score:
+                td.score,
+
+              // A team only receives
+              // season points from a
+              // meet when it has five
+              // scoring runners.
+              scored:
+                td.scoring.length >= 5
+            };
+          })
+          .filter(
+            x => x.scored
+          );
+
+      const seasonPoints =
+        meetScores.reduce(
+          (sum, x) =>
+            sum + x.score,
+          0
         );
 
-      // A meet only counts as a scored
-      // team meet if the team has five
-      // scoring runners.
-      if (
-        td.scoring.length >= 5
-      ) {
-        meetScores.push({
-          meet: firstValue(
-            m,
-            ["Meet"]
-          ),
-          meetId: meetId,
-          score: td.score
-        });
-      }
-    });
+      const average =
+        meetScores.length
+          ? seasonPoints /
+            meetScores.length
+          : null;
 
-    const seasonPoints =
-      meetScores.reduce(
-        (sum, x) =>
-          sum + x.score,
-        0
-      );
-
-    const average =
-      meetScores.length
-        ? seasonPoints /
-          meetScores.length
-        : null;
-
-    return {
-      name: name,
-      meetScores: meetScores,
-      seasonPoints:
+      return {
+        name,
         seasonPoints,
-      average: average,
-      meets:
-        meetScores.length,
-      rank: null
-    };
-  });
+        average,
+        meets:
+          meetScores.length,
+        meetScores
+      };
+    })
+    .sort((a, b) => {
+      // Teams with no scored meets
+      // go to the bottom.
+      if (
+        a.meets === 0 &&
+        b.meets !== 0
+      ) {
+        return 1;
+      }
 
+      if (
+        b.meets === 0 &&
+        a.meets !== 0
+      ) {
+        return -1;
+      }
 
-  // Teams with actual completed
-  // scores come first.
-  rankings.sort((a, b) => {
-    if (
-      a.meets === 0 &&
-      b.meets > 0
-    ) {
-      return 1;
-    }
-
-    if (
-      a.meets > 0 &&
-      b.meets === 0
-    ) {
-      return -1;
-    }
-
-    if (
-      a.seasonPoints !==
-      b.seasonPoints
-    ) {
-      return (
-        a.seasonPoints -
+      // Lower season points is better.
+      if (
+        a.seasonPoints !==
         b.seasonPoints
+      ) {
+        return (
+          a.seasonPoints -
+          b.seasonPoints
+        );
+      }
+
+      // Tie breaker: lower average.
+      if (
+        (a.average ?? Infinity) !==
+        (b.average ?? Infinity)
+      ) {
+        return (
+          (a.average ?? Infinity) -
+          (b.average ?? Infinity)
+        );
+      }
+
+      return a.name.localeCompare(
+        b.name
       );
-    }
-
-    if (
-      a.average !== null &&
-      b.average !== null &&
-      a.average !== b.average
-    ) {
-      return (
-        a.average -
-        b.average
-      );
-    }
-
-    return a.name.localeCompare(
-      b.name
-    );
-  });
-
-
-  rankings.forEach(
-    (x, i) => {
-      x.rank = i + 1;
-    }
-  );
-
-  return rankings;
+    })
+    .map((t, i) => ({
+      ...t,
+      rank: i + 1
+    }));
 }
 
 
 // ==============================
-// HOMEPAGE
+// LOAD DATA
+// ==============================
+
+async function loadWorkbook() {
+  try {
+    for (const tab of SHEET_TABS) {
+      DATA[tab] =
+        await fetchSheet(tab);
+    }
+
+    document.dispatchEvent(
+      new Event("xcdataready")
+    );
+  } catch (err) {
+    console.error(err);
+
+    document
+      .querySelectorAll(
+        "[data-error]"
+      )
+      .forEach(el => {
+        el.innerHTML =
+          `<strong>Data connection problem:</strong> ` +
+          `${esc(err.message)}` +
+          `<br>` +
+          `Make sure the Google Sheet is published to the web and accessible, ` +
+          `and the tabs are named Players, Teams, Meets, and Results.`;
+      });
+  }
+}
+
+
+// ==============================
+// PAGE ROUTING
+// ==============================
+
+document.addEventListener(
+  "xcdataready",
+  () => {
+    const path =
+      location.pathname
+        .split("/")
+        .pop();
+
+    if (
+      path === "index.html" ||
+      path === ""
+    ) {
+      renderHome();
+    }
+
+    if (
+      path === "players.html"
+    ) {
+      renderPlayers();
+    }
+
+    if (
+      path === "teams.html"
+    ) {
+      renderTeams();
+    }
+
+    if (
+      path === "past-meets.html"
+    ) {
+      renderPastMeets();
+    }
+
+    if (
+      path === "meet-calendar.html"
+    ) {
+      renderCalendar();
+    }
+  }
+);
+
+
+// ==============================
+// HOME PAGE
 // ==============================
 
 function renderHome() {
-  const completed =
-    DATA.Meets
-      .filter(meetIsCompleted)
-      .sort(
-        (a, b) =>
-          String(
-            firstValue(
-              b,
-              ["Date"]
+  // Find the player with the fastest
+  // calculated season best.
+  const playersWithTimes =
+    DATA.Players
+      .map(p => ({
+        player: p,
+        time: Math.min(
+          ...DATA.Results
+            .filter(
+              r =>
+                resultPlayerId(r) ===
+                playerId(p)
             )
-          ).localeCompare(
-            String(
-              firstValue(
-                a,
-                ["Date"]
-              )
+            .map(
+              r =>
+                raceTimeSeconds(
+                  firstValue(
+                    r,
+                    ["Time"]
+                  )
+                )
             )
-          )
-      );
-
-  const upcoming =
-    DATA.Meets
+            .filter(
+              Number.isFinite
+            )
+        )
+      }))
       .filter(
-        m =>
-          !meetIsCompleted(m)
-      )
-      .sort(
-        (a, b) =>
-          String(
-            firstValue(
-              a,
-              ["Date"]
-            )
-          ).localeCompare(
-            String(
-              firstValue(
-                b,
-                ["Date"]
-              )
-            )
+        x =>
+          Number.isFinite(
+            x.time
           )
       );
 
-  const set = (
-    selector,
-    value
-  ) => {
-    const el =
-      document.querySelector(
-        selector
-      );
-
-    if (el) {
-      el.textContent =
-        value;
-    }
-  };
-
+  playersWithTimes.sort(
+    (a, b) =>
+      a.time - b.time
+  );
 
   const p =
-    DATA.Players
-      .slice()
-      .sort(
-        (a, b) =>
-          (
-            raceTimeSeconds(
-              seasonBest(a)
-            ) ??
-            Infinity
-          ) -
-          (
-            raceTimeSeconds(
-              seasonBest(b)
-            ) ??
-            Infinity
-          )
-      )[0];
+    playersWithTimes.length
+      ? playersWithTimes[0].player
+      : null;
 
+  const upcoming =
+    DATA.Meets.find(
+      m =>
+        String(
+          m.Status
+        ).toLowerCase() ===
+        "upcoming"
+    );
+
+  const completed =
+    [...DATA.Meets]
+      .reverse()
+      .find(
+        m =>
+          String(
+            m.Status
+          ).toLowerCase() ===
+          "completed"
+      );
+
+  const set = (id, v) => {
+    const e =
+      document.querySelector(id);
+
+    if (e) {
+      e.textContent = v;
+    }
+  };
 
   set(
     "#player-count",
     DATA.Players.length
   );
 
-  set(
-    "#meet-count",
-    DATA.Meets.length
-  );
+  const leader =
+    document.querySelector(
+      "#leader"
+    );
 
-  set(
-    "#leader-name",
-    p
-      ? p.Name
-      : "—"
-  );
+  if (leader) {
+    leader.innerHTML =
+      p
+        ? playerLink(p)
+        : "—";
+  }
 
   set(
     "#leader-time",
@@ -1026,9 +1008,9 @@ function renderHome() {
 
   set(
     "#next-meet",
-    upcoming.length
+    upcoming
       ? firstValue(
-          upcoming[0],
+          upcoming,
           ["Meet"]
         )
       : "—"
@@ -1036,9 +1018,9 @@ function renderHome() {
 
   set(
     "#next-date",
-    upcoming.length
+    upcoming
       ? firstValue(
-          upcoming[0],
+          upcoming,
           ["Date"]
         )
       : "—"
@@ -1046,9 +1028,9 @@ function renderHome() {
 
   set(
     "#last-meet",
-    completed.length
+    completed
       ? firstValue(
-          completed[0],
+          completed,
           ["Meet"]
         )
       : "—"
@@ -1056,19 +1038,16 @@ function renderHome() {
 
   set(
     "#last-date",
-    completed.length
+    completed
       ? firstValue(
-          completed[0],
+          completed,
           ["Date"]
         )
       : "—"
   );
 
 
-  // ============================
-  // HOMEPAGE PLAYER PREVIEW
-  // ============================
-
+  // Homepage player preview.
   const preview =
     document.querySelector(
       "#preview-players"
@@ -1078,12 +1057,11 @@ function renderHome() {
     preview.innerHTML =
       DATA.Players
         .slice(0, 5)
-        .map(p => `
-          <tr>
-            <td>${playerLink(p)}</td>
-
-            <td>
-              ${esc(
+        .map(
+          p =>
+            `<tr>
+              <td>${playerLink(p)}</td>
+              <td>${esc(
                 firstValue(
                   p,
                   [
@@ -1092,30 +1070,20 @@ function renderHome() {
                   ]
                 ) ||
                 "IR / Unassigned"
-              )}
-            </td>
-
-            <td>
-              ${esc(
+              )}</td>
+              <td>${esc(
                 seasonBest(p)
-              )}
-            </td>
-
-            <td>
-              ${esc(
+              )}</td>
+              <td>${esc(
                 averagePoints(p)
-              )}
-            </td>
-          </tr>
-        `)
+              )}</td>
+            </tr>`
+        )
         .join("");
   }
 
 
-  // ============================
-  // HOMEPAGE TEAM PREVIEW
-  // ============================
-
+  // Homepage team rankings preview.
   const teamPreview =
     document.querySelector(
       "#preview-teams"
@@ -1128,26 +1096,24 @@ function renderHome() {
     teamPreview.innerHTML =
       rankings
         .slice(0, 5)
-        .map(t => `
-          <tr>
-            <td>${t.rank}</td>
-
-            <td>
-              ${esc(t.name)}
-            </td>
-
-            <td>
-              ${
+        .map(
+          t =>
+            `<tr>
+              <td>${t.rank}</td>
+              <td>${esc(
+                t.name
+              )}</td>
+              <td>${
                 t.meets
                   ? t.seasonPoints
                   : "—"
-              }
-            </td>
-          </tr>
-        `)
+              }</td>
+            </tr>`
+        )
         .join("");
   }
 }
+
 
 // ==============================
 // PLAYERS PAGE
@@ -1169,9 +1135,6 @@ function renderPlayers() {
       "#profile"
     );
 
-  if (!table || !profile) {
-    return;
-  }
 
   const selected =
     new URLSearchParams(
@@ -1213,6 +1176,7 @@ function renderPlayers() {
             )
         );
 
+
     const rows =
       results.length
         ? results
@@ -1220,7 +1184,7 @@ function renderPlayers() {
               const status =
                 resultStatus(r);
 
-              const place =
+              let place =
                 racePlace(
                   r,
                   resultMeetId(r)
@@ -1230,11 +1194,13 @@ function renderPlayers() {
                 "—";
 
               if (status === "DNS") {
-                scoreDisplay = "DNS";
+                scoreDisplay =
+                  "DNS";
               } else if (
                 status === "DNF"
               ) {
-                scoreDisplay = "DNF";
+                scoreDisplay =
+                  "DNF";
               } else if (
                 Number.isFinite(place)
               ) {
@@ -1244,47 +1210,33 @@ function renderPlayers() {
 
               return `
                 <tr>
-                  <td>
-                    ${esc(
-                      meetName(
-                        resultMeetId(r)
-                      )
-                    )}
-                  </td>
+                  <td>${esc(
+                    meetName(
+                      resultMeetId(r)
+                    )
+                  )}</td>
 
-                  <td>
-                    ${esc(
-                      meetDate(
-                        resultMeetId(r)
-                      )
-                    )}
-                  </td>
+                  <td>${esc(
+                    meetDate(
+                      resultMeetId(r)
+                    )
+                  )}</td>
 
-                  <td>
-                    ${esc(
-                      resultTeam(
-                        r,
-                        p
-                      ) ||
-                      "IR / Unassigned"
-                    )}
-                  </td>
+                  <td>${esc(
+                    resultTeam(r, p) ||
+                    "IR / Unassigned"
+                  )}</td>
 
-                  <td>
-                    ${esc(
-                      firstValue(
-                        r,
-                        ["Time"]
-                      ) ||
-                      status
-                    )}
-                  </td>
+                  <td>${esc(
+                    firstValue(
+                      r,
+                      ["Time"]
+                    ) || status
+                  )}</td>
 
-                  <td>
-                    ${esc(
-                      scoreDisplay
-                    )}
-                  </td>
+                  <td>${esc(
+                    scoreDisplay
+                  )}</td>
                 </tr>
               `;
             })
@@ -1312,13 +1264,11 @@ function renderPlayers() {
     profile.innerHTML = `
       <div class="profile-heading">
         <div>
-          <h2>
-            ${esc(p.Name)}
-          </h2>
+          <h2>${esc(
+            p.Name
+          )}</h2>
 
-          <p>
-            Player Profile
-          </p>
+          <p>Player Profile</p>
         </div>
 
         <a
@@ -1338,7 +1288,9 @@ function renderPlayers() {
           </div>
 
           <div class="value">
-            ${esc(fantasyTeam)}
+            ${esc(
+              fantasyTeam
+            )}
           </div>
         </div>
 
@@ -1408,9 +1360,7 @@ function renderPlayers() {
 
       <div class="panel profile-meets">
 
-        <h3>
-          Meets Raced
-        </h3>
+        <h3>Meets Raced</h3>
 
         <div class="table-wrap">
 
@@ -1440,16 +1390,13 @@ function renderPlayers() {
   } else {
 
     profile.innerHTML = `
-      <h2>
-        Select A Player
-      </h2>
+      <h2>Select A Player</h2>
 
       <p>
         Click a player name below to open
         their full profile.
       </p>
     `;
-
   }
 
 
@@ -1459,20 +1406,19 @@ function renderPlayers() {
 
   function draw() {
     const term =
-      (q
-        ? q.value
-        : ""
-      )
+      (q.value || "")
         .toLowerCase()
         .trim();
 
     table.innerHTML =
       DATA.Players
         .filter(p => {
-
           const searchable = [
             p.Name,
 
+            // IMPORTANT:
+            // Fantasy Team is included
+            // in the search.
             firstValue(
               p,
               [
@@ -1506,9 +1452,7 @@ function renderPlayers() {
             term
           );
         })
-
         .map(p => {
-
           const fantasyTeam =
             firstValue(
               p,
@@ -1567,7 +1511,6 @@ function renderPlayers() {
 
             </tr>
           `;
-
         })
         .join("");
   }
@@ -1592,11 +1535,17 @@ function renderTeams() {
   const rankingBody =
     document.querySelector(
       "#team-ranking-rows"
+    ) ||
+    document.querySelector(
+      "#ranking-rows"
     );
 
   const detailBody =
     document.querySelector(
       "#team-rows"
+    ) ||
+    document.querySelector(
+      "#teams-rows"
     );
 
   const rankings =
@@ -1608,15 +1557,15 @@ function renderTeams() {
   // ============================
 
   if (rankingBody) {
-
     rankingBody.innerHTML =
       rankings
         .map(t => {
-
           const avg =
             t.average === null
               ? "—"
-              : t.average.toFixed(1);
+              : t.average.toFixed(
+                  1
+                );
 
           return `
             <tr>
@@ -1629,7 +1578,9 @@ function renderTeams() {
 
               <td>
                 <strong>
-                  ${esc(t.name)}
+                  ${esc(
+                    t.name
+                  )}
                 </strong>
               </td>
 
@@ -1651,10 +1602,8 @@ function renderTeams() {
 
             </tr>
           `;
-
         })
-        .join("")
-      ||
+        .join("") ||
       `
         <tr>
           <td colspan="5">
@@ -1670,11 +1619,9 @@ function renderTeams() {
   // ============================
 
   if (detailBody) {
-
     detailBody.innerHTML =
       DATA.Teams
         .map(t => {
-
           const name =
             firstValue(
               t,
@@ -1699,10 +1646,8 @@ function renderTeams() {
           const ranking =
             rankings.find(
               x =>
-                x.name ===
-                name
+                x.name === name
             );
-
 
           const roster =
             DATA.Players
@@ -1717,9 +1662,8 @@ function renderTeams() {
                   ) === name
               )
               .map(playerLink)
-              .join(", ")
-              ||
-              "No players listed";
+              .join(", ") ||
+            "No players listed";
 
 
           const meetHistory =
@@ -1776,7 +1720,9 @@ function renderTeams() {
                 ${
                   ranking &&
                   ranking.average !== null
-                    ? ranking.average.toFixed(1)
+                    ? ranking.average.toFixed(
+                        1
+                      )
                     : "—"
                 }
               </td>
@@ -1791,7 +1737,6 @@ function renderTeams() {
 
             </tr>
           `;
-
         })
         .join("");
   }
@@ -1805,23 +1750,31 @@ function renderTeams() {
 function renderPastMeets() {
   const completed =
     DATA.Meets.filter(
-      meetIsCompleted
+      m =>
+        String(
+          m.Status
+        ).toLowerCase() ===
+        "completed"
     );
 
   const container =
     document.querySelector(
       "#past-rows"
+    ) ||
+    document.querySelector(
+      "#past-meet-rows"
+    ) ||
+    document.querySelector(
+      "#meet-rows"
     );
 
   if (!container) {
     return;
   }
 
-
   container.innerHTML =
     completed
       .map(m => {
-
         const mid =
           firstValue(
             m,
@@ -1865,7 +1818,6 @@ function renderPastMeets() {
           top.length
             ? top
                 .map(r => {
-
                   const p =
                     DATA.Players.find(
                       x =>
@@ -1911,7 +1863,6 @@ function renderPastMeets() {
 
                     </tr>
                   `;
-
                 })
                 .join("")
             : `
@@ -1940,7 +1891,6 @@ function renderPastMeets() {
               .concat(
                 results
                   .map(r => {
-
                     const p =
                       DATA.Players.find(
                         x =>
@@ -1952,7 +1902,6 @@ function renderPastMeets() {
                       r,
                       p || {}
                     );
-
                   })
                   .filter(Boolean)
               )
@@ -1967,7 +1916,6 @@ function renderPastMeets() {
         const cards =
           names
             .map(team => {
-
               const td =
                 buildTeamMeet(
                   team,
@@ -1992,14 +1940,14 @@ function renderPastMeets() {
 
                     <strong>
                       ${
-                        td.scoring.length >= 5
-                          ? td.score
-                          : "—"
+                        td.score ||
+                        "—"
                       }
                       pts
 
                       ${
-                        td.scoring.length < 5
+                        td.scoring
+                          .length < 5
                           ? " · incomplete"
                           : ""
                       }
@@ -2019,7 +1967,6 @@ function renderPastMeets() {
 
                 </div>
               `;
-
             })
             .join("");
 
@@ -2057,6 +2004,7 @@ function renderPastMeets() {
               Top 10
             </h3>
 
+
             <div class="table-wrap">
 
               <table>
@@ -2083,16 +2031,15 @@ function renderPastMeets() {
               Team Scores
             </h3>
 
+
             <div class="team-scores">
               ${cards}
             </div>
 
           </section>
         `;
-
       })
-      .join("")
-    ||
+      .join("") ||
     `
       <section class="panel">
         No completed meets in the spreadsheet yet.
@@ -2170,53 +2117,5 @@ function renderCalendar() {
 // ==============================
 // START
 // ==============================
-
-async function loadWorkbook() {
-  try {
-
-    DATA.Players =
-      await fetchSheet(
-        "Players"
-      );
-
-    DATA.Teams =
-      await fetchSheet(
-        "Teams"
-      );
-
-    DATA.Meets =
-      await fetchSheet(
-        "Meets"
-      );
-
-    DATA.Results =
-      await fetchSheet(
-        "Results"
-      );
-
-
-    renderHome();
-    renderPlayers();
-    renderTeams();
-    renderPastMeets();
-    renderCalendar();
-
-  } catch (error) {
-
-    console.error(error);
-
-    const errorElements =
-      document.querySelectorAll(
-        "[data-error]"
-      );
-
-    errorElements.forEach(el => {
-      el.textContent =
-        "Unable to load Google Sheets data. Check that the spreadsheet is published to the web and accessible.";
-    });
-
-  }
-}
-
 
 loadWorkbook();
