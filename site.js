@@ -419,145 +419,95 @@ function averagePoints(p) {
 // IR REPLACEMENT
 // ==============================
 
-// A player is IR when they are not assigned
-// to a fantasy team in the Players sheet.
+// A player is IR for a particular meet when
+// they have no fantasy team recorded on that
+// meet's Results row.
 //
 // If a fantasy team has 3 or more DNS runners,
-// the fastest eligible IR runner who actually
-// raced that meet becomes the team's
-// one IR replacement.
+// the fastest IR runner who actually raced
+// becomes the team's one IR replacement.
+//
+// IMPORTANT:
+// - Finished IR runners are eligible.
+// - DNF IR runners are ALSO eligible.
+// - DNS IR runners are NOT eligible.
+//
+// If there is at least one IR finisher,
+// the fastest finisher is selected.
+// If there are no IR finishers but there is
+// an IR DNF, the DNF is selected.
 
 function getIRReplacement(team, id) {
   const meetRows = meetResults(id);
+  const places = racePlaces(id);
 
   // Count DNS runners assigned to this team
   // for THIS specific meet.
-  const teamRows = meetRows.filter(r => {
+  const dnsCount = meetRows.filter(r => {
     const historicalTeam =
       firstValue(r, ["Team"]).trim();
 
-    return historicalTeam === team;
-  });
+    return (
+      historicalTeam === team &&
+      isDNS(r)
+    );
+  }).length;
 
-  const dnsCount =
-    teamRows.filter(isDNS).length;
-
+  // No IR replacement unless the team
+  // has at least 3 DNS runners.
   if (dnsCount < 3) {
     return null;
   }
 
-  // IR runners are runners with NO team recorded
-  // on the Results row for THIS meet.
+  // IR runners are runners with no team
+  // recorded on THIS meet's Results row.
   //
-  // DNS IR runners are not eligible.
-  // DNF IR runners ARE eligible.
+  // DNS runners are not eligible.
+  // DNF runners ARE eligible.
   const eligible = meetRows
     .filter(r => {
-      if (isDNS(r)) {
-        return false;
-      }
-
       const historicalTeam =
         firstValue(r, ["Team"]).trim();
 
-      // Blank team on this meet = IR.
       if (historicalTeam !== "") {
         return false;
       }
 
-      const p = DATA.Players.find(
-        x =>
-          playerId(x) ===
-          resultPlayerId(r)
-      );
-
-      if (!p) {
+      if (isDNS(r)) {
         return false;
       }
 
-      // A finished runner must have a valid time.
-      // A DNF is also eligible even though
-      // they do not have a finishing time.
-      if (isDNF(r)) {
-        return true;
-      }
+      const pid =
+        resultPlayerId(r);
 
-      return Number.isFinite(
-        raceTimeSeconds(
-          firstValue(r, ["Time"])
-        )
-      );
+      const player =
+        DATA.Players.find(
+          p => playerId(p) === pid
+        );
+
+      return !!player;
     })
     .map(r => ({
       ...r,
-      _time: isDNF(r)
-        ? Infinity
-        : raceTimeSeconds(
-            firstValue(r, ["Time"])
-          ),
-      _isIRReplacement: true
-    }))
-    .sort(
-      (a, b) => a._time - b._time
-    );
+      player:
+        DATA.Players.find(
+          p =>
+            playerId(p) ===
+            resultPlayerId(r)
+        ),
+      place:
+        places[resultPlayerId(r)] ?? null
+    }));
 
-  return eligible.length
-    ? eligible[0]
-    : null;
-}
+  if (!eligible.length) {
+    return null;
+  }
 
-// ==============================
-// TEAM MEET SCORING
-// ==============================
-
-function buildTeamMeet(teamName, meetId) {
-  const allResults = meetResults(meetId);
-
-  const places = racePlaces(meetId);
-
-  // IMPORTANT:
-  // For a specific meet, use the Team recorded on that
-  // meet's Results row. Do NOT use the player's current
-  // fantasy team as a fallback.
-  const meetRows = allResults
-    .map(r => {
-      const pid = resultPlayerId(r);
-
-      const player = DATA.Players.find(
-        p => playerId(p) === pid
-      );
-
-      // Team is intentionally taken ONLY from Results.
-      const historicalTeam = firstValue(
-        r,
-        ["Team"]
-      ).trim();
-
-      const status = resultStatus(r);
-
-      return {
-        result: r,
-        player,
-        playerId: pid,
-        team: historicalTeam,
-        status,
-        place: places[pid] ?? null
-      };
-    });
-
-  // Only runners who were actually assigned to this team
-  // for THIS particular meet belong to the team.
-  const teamResults = meetRows.filter(
-    r =>
-      r.team === teamName
-  );
-
-  // Finished runners, ordered by their overall race place.
-  const finished = teamResults
+  // Finished IR runners have an actual race place.
+  const finishers = eligible
     .filter(
       r =>
-        r.status !== "DNS" &&
-        r.status !== "DNF" &&
+        !isDNF(r) &&
         Number.isFinite(r.place)
     )
     .sort(
@@ -565,45 +515,100 @@ function buildTeamMeet(teamName, meetId) {
         a.place - b.place
     );
 
-  // DNF runners come after all finishers.
-  const dnfs = teamResults.filter(
-    r =>
-      r.status === "DNF"
+  // If an IR runner finished, the fastest
+  // finished IR runner is the replacement.
+  if (finishers.length) {
+    return {
+      ...finishers[0],
+      irReplacement: true
+    };
+  }
+
+  // If all eligible IR runners DNF'd,
+  // use the first IR DNF as the replacement.
+  //
+  // A DNF has no race place, so it receives
+  // the normal DNF scoring treatment in
+  // buildTeamMeet().
+  const dnfs = eligible.filter(
+    r => isDNF(r)
   );
 
-  // DNS runners do not score.
-  const dns = teamResults.filter(
-    r =>
-      r.status === "DNS"
-  );
+  if (dnfs.length) {
+    return {
+      ...dnfs[0],
+      irReplacement: true
+    };
+  }
 
-  const ordered = [
-    ...finished,
-    ...dnfs
-  ];
+  return null;
+}
 
-  // --------------------------------
-  // IR REPLACEMENT
-  // --------------------------------
+
+// ==============================
+// TEAM MEET SCORING
+// ==============================
+
+function buildTeamMeet(teamName, meetId) {
+  const allResults =
+    meetResults(meetId);
+
+  const places =
+    racePlaces(meetId);
+
+  // IMPORTANT:
+  // The team for a runner in a historical
+  // meet comes ONLY from that meet's
+  // Results row.
   //
-  // A team gets one IR replacement if
-  // it has 3+ DNS runners in this meet.
-  //
-  // An IR runner is someone whose Team
-  // field on THIS meet's Results row is
-  // blank/unassigned.
-  //
-  // The fastest eligible IR runner who
-  // actually ran this meet is selected.
-  // --------------------------------
+  // This prevents a player who joins a team
+  // later from having an old result added
+  // to their new team.
+  const meetRows =
+    allResults.map(r => {
+      const pid =
+        resultPlayerId(r);
 
-  let replacement = null;
+      const player =
+        DATA.Players.find(
+          p =>
+            playerId(p) === pid
+        );
 
-  if (dns.length >= 3) {
-    const irRunners = meetRows
+      const historicalTeam =
+        firstValue(
+          r,
+          ["Team"]
+        ).trim();
+
+      const status =
+        resultStatus(r);
+
+      return {
+        result: r,
+        player,
+        playerId: pid,
+        team: historicalTeam,
+        status,
+        place:
+          places[pid] ?? null
+      };
+    });
+
+  // Only runners who were actually on
+  // this team for THIS meet.
+  const teamResults =
+    meetRows.filter(
+      r =>
+        r.team === teamName
+    );
+
+  // Finished runners ordered by
+  // overall race place.
+  const finished =
+    teamResults
       .filter(
         r =>
-          !r.team &&
           r.status !== "DNS" &&
           r.status !== "DNF" &&
           Number.isFinite(r.place)
@@ -613,13 +618,37 @@ function buildTeamMeet(teamName, meetId) {
           a.place - b.place
       );
 
-    if (irRunners.length) {
-      replacement = {
-        ...irRunners[0],
-        irReplacement: true
-      };
-    }
-  }
+  // DNF runners come after finishers.
+  const dnfs =
+    teamResults.filter(
+      r =>
+        r.status === "DNF"
+    );
+
+  // DNS runners do not score.
+  const dns =
+    teamResults.filter(
+      r =>
+        r.status === "DNS"
+    );
+
+  const ordered = [
+    ...finished,
+    ...dnfs
+  ];
+
+  // --------------------------------
+  // IR REPLACEMENT
+  // --------------------------------
+
+  // Let getIRReplacement() handle ALL
+  // IR replacement logic, including DNF
+  // IR runners.
+  const replacement =
+    getIRReplacement(
+      teamName,
+      meetId
+    );
 
   if (replacement) {
     ordered.push(replacement);
@@ -628,22 +657,20 @@ function buildTeamMeet(teamName, meetId) {
   // --------------------------------
   // TEAM SCORING
   // --------------------------------
-  //
-  // First five runners score.
-  // Runners after the first five are
-  // displacers.
-  //
-  // DNF gets the next place after all
-  // finishers on the team.
-  // --------------------------------
 
   const finishedCount =
     finished.length;
 
-  const scoring = ordered
-    .map((r, index) => {
-      let score = r.place;
+  const scoredRows =
+    ordered.map(r => {
+      let score =
+        r.place;
 
+      // A DNF receives the next place
+      // after all finishers on the team.
+      //
+      // This also applies to an IR
+      // replacement who DNF'd.
       if (r.status === "DNF") {
         score =
           finishedCount + 1;
@@ -653,25 +680,18 @@ function buildTeamMeet(teamName, meetId) {
         ...r,
         score
       };
-    })
-    .slice(0, 5);
+    });
 
-  const extra = ordered
-    .map((r, index) => {
-      let score = r.place;
+  // First five runners score.
+  const scoring =
+    scoredRows.slice(0, 5);
 
-      if (r.status === "DNF") {
-        score =
-          finishedCount + 1;
-      }
+  // Runners 6+ are displacers.
+  const extra =
+    scoredRows.slice(5);
 
-      return {
-        ...r,
-        score
-      };
-    })
-    .slice(5);
-
+  // A team needs five scoring runners
+  // to have a completed score.
   const score =
     scoring.length >= 5
       ? scoring.reduce(
