@@ -1256,7 +1256,6 @@ function renderPlayers() {
       "#profile"
     );
 
-
   const selected =
     new URLSearchParams(
       location.search
@@ -1269,18 +1268,323 @@ function renderPlayers() {
         selected
     );
 
-
   // ============================
-  // INDIVIDUAL PLAYER PROFILE
+  // PLAYER COMPARISON HELPERS
   // ============================
 
-  if (p) {
+  function meetsRun(p) {
+    return DATA.Results.filter(
+      r =>
+        resultPlayerId(r) === playerId(p) &&
+        !isDNS(r)
+    ).length;
+  }
+
+  function bestFinish(p) {
+    const places = pointsForPlayer(p);
+
+    return places.length
+      ? Math.min(...places)
+      : null;
+  }
+
+  function playerMetric(p, sortBy) {
+    if (sortBy === "pr") {
+      return raceTimeSeconds(
+        firstValue(p, ["PR", "5K PR"])
+      );
+    }
+
+    if (sortBy === "sb") {
+      return raceTimeSeconds(
+        seasonBest(p)
+      );
+    }
+
+    if (sortBy === "average") {
+      const avg = Number(averagePoints(p));
+      return Number.isFinite(avg) ? avg : Infinity;
+    }
+
+    if (sortBy === "meets") {
+      return meetsRun(p);
+    }
+
+    return 0;
+  }
+
+  function comparisonResult(p, r) {
+    const status = resultStatus(r);
+
+    if (status === "DNS") {
+      return "DNS";
+    }
+
+    if (status === "DNF") {
+      return "DNF";
+    }
+
+    const place = racePlace(
+      r,
+      resultMeetId(r)
+    );
+
+    const time =
+      firstValue(r, ["Time"]) || "—";
+
+    return Number.isFinite(place)
+      ? `${time} · ${place}${ordinalSuffix(place)}`
+      : time;
+  }
+
+  function comparisonMeetRows(a, b) {
+    const ids = [
+      ...new Set(
+        DATA.Results
+          .filter(
+            r =>
+              resultPlayerId(r) === playerId(a) ||
+              resultPlayerId(r) === playerId(b)
+          )
+          .map(resultMeetId)
+      )
+    ];
+
+    ids.sort(
+      (x, y) =>
+        String(meetDate(y)).localeCompare(
+          String(meetDate(x))
+        )
+    );
+
+    return ids
+      .map(id => {
+        const ar = DATA.Results.find(
+          r =>
+            resultPlayerId(r) === playerId(a) &&
+            resultMeetId(r) === id
+        );
+
+        const br = DATA.Results.find(
+          r =>
+            resultPlayerId(r) === playerId(b) &&
+            resultMeetId(r) === id
+        );
+
+        return `
+          <tr>
+            <td>${esc(meetName(id))}</td>
+            <td>${esc(meetDate(id))}</td>
+            <td>${ar ? esc(comparisonResult(a, ar)) : "—"}</td>
+            <td>${br ? esc(comparisonResult(b, br)) : "—"}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function renderComparison(a, b) {
+    if (!profile) {
+      return;
+    }
+
+    const aTeam =
+      firstValue(
+        a,
+        ["Team", "Fantasy Team"]
+      ) ||
+      "IR / Unassigned";
+
+    const bTeam =
+      firstValue(
+        b,
+        ["Team", "Fantasy Team"]
+      ) ||
+      "IR / Unassigned";
+
+    const aPr =
+      firstValue(
+        a,
+        ["PR", "5K PR"]
+      ) || "—";
+
+    const bPr =
+      firstValue(
+        b,
+        ["PR", "5K PR"]
+      ) || "—";
+
+    const aSb = seasonBest(a);
+    const bSb = seasonBest(b);
+
+    const aAvg = averagePoints(a);
+    const bAvg = averagePoints(b);
+
+    const aMeets = meetsRun(a);
+    const bMeets = meetsRun(b);
+
+    const aBest = bestFinish(a);
+    const bBest = bestFinish(b);
+
+    profile.innerHTML = `
+      <div class="profile-heading">
+        <div>
+          <h2>Compare Athletes</h2>
+          <p>${esc(a.Name)} vs. ${esc(b.Name)}</p>
+        </div>
+
+        <button
+          type="button"
+          class="back-link"
+          id="compare-back"
+          style="background:none;border:0;cursor:pointer;"
+        >
+          ← Back To ${esc(a.Name)}
+        </button>
+      </div>
+
+      <div
+        class="grid"
+        style="grid-template-columns:repeat(2,minmax(0,1fr));"
+      >
+        <div class="card">
+          <div class="label">Athlete</div>
+          <div class="value">${esc(a.Name)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Athlete</div>
+          <div class="value">${esc(b.Name)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Fantasy Team</div>
+          <div class="value">${esc(aTeam)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Fantasy Team</div>
+          <div class="value">${esc(bTeam)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">PR</div>
+          <div class="value">${esc(aPr)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">PR</div>
+          <div class="value">${esc(bPr)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Season Best</div>
+          <div class="value">${esc(aSb)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Season Best</div>
+          <div class="value">${esc(bSb)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Average Points</div>
+          <div class="value">${esc(aAvg)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Average Points</div>
+          <div class="value">${esc(bAvg)}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Meets Run</div>
+          <div class="value">${aMeets}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Meets Run</div>
+          <div class="value">${bMeets}</div>
+        </div>
+
+        <div class="card">
+          <div class="label">Best Finish</div>
+          <div class="value">
+            ${
+              Number.isFinite(aBest)
+                ? `${aBest}${ordinalSuffix(aBest)}`
+                : "—"
+            }
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="label">Best Finish</div>
+          <div class="value">
+            ${
+              Number.isFinite(bBest)
+                ? `${bBest}${ordinalSuffix(bBest)}`
+                : "—"
+            }
+          </div>
+        </div>
+      </div>
+
+      <div class="panel profile-meets">
+        <h3>Meet-By-Meet Comparison</h3>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Meet</th>
+                <th>Date</th>
+                <th>${esc(a.Name)}</th>
+                <th>${esc(b.Name)}</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${
+                comparisonMeetRows(a, b) ||
+                `
+                  <tr>
+                    <td colspan="4">
+                      No meet results entered yet.
+                    </td>
+                  </tr>
+                `
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    const back =
+      document.querySelector(
+        "#compare-back"
+      );
+
+    if (back) {
+      back.addEventListener(
+        "click",
+        () => renderProfile(a)
+      );
+    }
+  }
+
+  function renderProfile(player) {
+    if (!profile) {
+      return;
+    }
+
     const results =
       DATA.Results
         .filter(
           r =>
             resultPlayerId(r) ===
-            playerId(p)
+            playerId(player)
         )
         .sort(
           (a, b) =>
@@ -1296,7 +1600,6 @@ function renderPlayers() {
               )
             )
         );
-
 
     const rows =
       results.length
@@ -1344,7 +1647,7 @@ function renderPlayers() {
                   )}</td>
 
                   <td>${esc(
-                    resultTeam(r, p) ||
+                    resultTeam(r, player) ||
                     "IR / Unassigned"
                   )}</td>
 
@@ -1370,10 +1673,9 @@ function renderPlayers() {
           </tr>
         `;
 
-
     const fantasyTeam =
       firstValue(
-        p,
+        player,
         [
           "Team",
           "Fantasy Team"
@@ -1381,25 +1683,85 @@ function renderPlayers() {
       ) ||
       "IR / Unassigned";
 
-
     profile.innerHTML = `
       <div class="profile-heading">
         <div>
           <h2>${esc(
-            p.Name
+            player.Name
           )}</h2>
 
           <p>Player Profile</p>
         </div>
 
-        <a
-          class="back-link"
-          href="players.html"
+        <div
+          style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"
         >
-          ← All Players
-        </a>
+          <button
+            type="button"
+            class="compare-player-button"
+            id="compare-player-button"
+          >
+            Compare
+          </button>
+
+          <a
+            class="back-link"
+            href="players.html"
+          >
+            ← All Players
+          </a>
+        </div>
       </div>
 
+      <div
+        id="compare-picker"
+        class="panel"
+        style="display:none;margin-bottom:20px;"
+      >
+        <h3>Compare ${esc(player.Name)} With</h3>
+
+        <div
+          style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"
+        >
+          <select
+            id="compare-player-select"
+            style="padding:10px;min-width:240px;"
+          >
+            <option value="">Select Another Athlete</option>
+            ${
+              [...DATA.Players]
+                .sort(
+                  (a, b) =>
+                    String(a.Name || "").localeCompare(
+                      String(b.Name || "")
+                    )
+                )
+                .filter(
+                  x =>
+                    playerId(x) !==
+                    playerId(player)
+                )
+                .map(
+                  x =>
+                    `<option value="${esc(
+                      playerId(x)
+                    )}">${esc(
+                      x.Name
+                    )}</option>`
+                )
+                .join("")
+            }
+          </select>
+
+          <button
+            type="button"
+            id="compare-go"
+            class="compare-player-button"
+          >
+            Compare
+          </button>
+        </div>
+      </div>
 
       <div class="grid">
 
@@ -1415,7 +1777,6 @@ function renderPlayers() {
           </div>
         </div>
 
-
         <div class="card">
           <div class="label">
             Grade
@@ -1424,13 +1785,12 @@ function renderPlayers() {
           <div class="value">
             ${esc(
               firstValue(
-                p,
+                player,
                 ["Grade"]
               )
             )}
           </div>
         </div>
-
 
         <div class="card">
           <div class="label">
@@ -1440,7 +1800,7 @@ function renderPlayers() {
           <div class="value">
             ${esc(
               firstValue(
-                p,
+                player,
                 [
                   "PR",
                   "5K PR"
@@ -1450,7 +1810,6 @@ function renderPlayers() {
           </div>
         </div>
 
-
         <div class="card">
           <div class="label">
             Season Best
@@ -1458,11 +1817,10 @@ function renderPlayers() {
 
           <div class="value">
             ${esc(
-              seasonBest(p)
+              seasonBest(player)
             )}
           </div>
         </div>
-
 
         <div class="card">
           <div class="label">
@@ -1471,13 +1829,12 @@ function renderPlayers() {
 
           <div class="value">
             ${esc(
-              averagePoints(p)
+              averagePoints(player)
             )}
           </div>
         </div>
 
       </div>
-
 
       <div class="panel profile-meets">
 
@@ -1508,8 +1865,69 @@ function renderPlayers() {
       </div>
     `;
 
-  } else {
+    const compareButton =
+      document.querySelector(
+        "#compare-player-button"
+      );
 
+    const comparePicker =
+      document.querySelector(
+        "#compare-picker"
+      );
+
+    const compareSelect =
+      document.querySelector(
+        "#compare-player-select"
+      );
+
+    const compareGo =
+      document.querySelector(
+        "#compare-go"
+      );
+
+    if (compareButton && comparePicker) {
+      compareButton.addEventListener(
+        "click",
+        () => {
+          comparePicker.style.display =
+            comparePicker.style.display === "none"
+              ? "block"
+              : "none";
+        }
+      );
+    }
+
+    if (compareGo && compareSelect) {
+      compareGo.addEventListener(
+        "click",
+        () => {
+          const other =
+            DATA.Players.find(
+              x =>
+                playerId(x) ===
+                compareSelect.value
+            );
+
+          if (!other) {
+            return;
+          }
+
+          renderComparison(
+            player,
+            other
+          );
+        }
+      );
+    }
+  }
+
+  // ============================
+  // INDIVIDUAL PLAYER PROFILE
+  // ============================
+
+  if (p) {
+    renderProfile(p);
+  } else if (profile) {
     profile.innerHTML = `
       <h2>Select A Player</h2>
 
@@ -1520,26 +1938,99 @@ function renderPlayers() {
     `;
   }
 
+  // ============================
+  // PLAYER TABLE SORTING
+  // ============================
+
+  let sortBy = "name";
+
+  if (
+    table &&
+    !document.querySelector(
+      "#player-sort"
+    )
+  ) {
+    const sortWrap =
+      document.createElement("div");
+
+    sortWrap.className =
+      "player-sort-controls";
+
+    sortWrap.style.cssText =
+      "display:flex;align-items:center;gap:10px;margin:0 0 16px;flex-wrap:wrap;";
+
+    sortWrap.innerHTML = `
+      <label
+        for="player-sort"
+        style="font-weight:600;"
+      >
+        Sort Runners By
+      </label>
+
+      <select
+        id="player-sort"
+        style="padding:9px 12px;"
+      >
+        <option value="name">Name</option>
+        <option value="pr">PR</option>
+        <option value="sb">Season Best</option>
+        <option value="average">Average Points</option>
+        <option value="meets">Meets Run</option>
+      </select>
+    `;
+
+    if (table.parentElement) {
+      table.parentElement.parentElement
+        ? table.parentElement.parentElement.insertBefore(
+            sortWrap,
+            table.parentElement
+          )
+        : table.parentElement.insertBefore(
+            sortWrap,
+            table
+          );
+    }
+
+    const sortSelect =
+      document.querySelector(
+        "#player-sort"
+      );
+
+    if (sortSelect) {
+      sortSelect.addEventListener(
+        "change",
+        () => {
+          sortBy =
+            sortSelect.value;
+
+          draw();
+        }
+      );
+    }
+  }
 
   // ============================
   // PLAYER TABLE
   // ============================
 
   function draw() {
-    const term =
-      (q.value || "")
-        .toLowerCase()
-        .trim();
+    if (!table) {
+      return;
+    }
 
-    table.innerHTML =
+    const term =
+      q
+        ? (q.value || "")
+            .toLowerCase()
+            .trim()
+        : "";
+
+    const players =
       DATA.Players
         .filter(p => {
           const searchable = [
             p.Name,
 
-            // IMPORTANT:
-            // Fantasy Team is included
-            // in the search.
             firstValue(
               p,
               [
@@ -1572,7 +2063,69 @@ function renderPlayers() {
           return searchable.includes(
             term
           );
-        })
+        });
+
+    players.sort(
+      (a, b) => {
+        if (sortBy === "name") {
+          return String(
+            a.Name || ""
+          ).localeCompare(
+            String(
+              b.Name || ""
+            )
+          );
+        }
+
+        if (sortBy === "meets") {
+          return (
+            playerMetric(b, sortBy) -
+            playerMetric(a, sortBy)
+          );
+        }
+
+        const av =
+          playerMetric(
+            a,
+            sortBy
+          );
+
+        const bv =
+          playerMetric(
+            b,
+            sortBy
+          );
+
+        if (
+          av === Infinity &&
+          bv !== Infinity
+        ) {
+          return 1;
+        }
+
+        if (
+          bv === Infinity &&
+          av !== Infinity
+        ) {
+          return -1;
+        }
+
+        if (av !== bv) {
+          return av - bv;
+        }
+
+        return String(
+          a.Name || ""
+        ).localeCompare(
+          String(
+            b.Name || ""
+          )
+        );
+      }
+    );
+
+    table.innerHTML =
+      players
         .map(p => {
           const fantasyTeam =
             firstValue(
@@ -1636,7 +2189,6 @@ function renderPlayers() {
         .join("");
   }
 
-
   if (q) {
     q.addEventListener(
       "input",
@@ -1646,7 +2198,6 @@ function renderPlayers() {
 
   draw();
 }
-
 
 // ==============================
 // TEAMS PAGE
